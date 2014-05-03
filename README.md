@@ -1,10 +1,14 @@
-# swarm_project
+# Microbial Swarm Simulation
 
-A Clojure library designed to ... well, that part is up to you.
+A swarm simulates the behavior of a swarm of microbes. They grow in a grid that filled with nutrients 
+and live, die or split depending on wheather they eat enough, or not enough. Nutrients will be replenished 
+periodically in a defined behavior as well. 
 
-## Usage
+Eventually optimization will 
+be added, so each microbe's behavior will change based on what the optimization parameter is e.g. individual's age, 
+or overall swarm's health. 
 
-FIXME
+Animation is done using Java Swing Library. 
 
 ## License
 
