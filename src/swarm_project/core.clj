@@ -1,4 +1,4 @@
-(ns swarm-project.core
+(ns microbe-swarm.core
   (use [clojure.core])
   (use [clojure.set])
   (import 
@@ -30,18 +30,18 @@
 ;pixels per world cell
 (def scale 10)
 
-(def render-nutrients? true)
-(def render-microbes?  true)
-(def running false)
+(def render-nutrients (ref true))
+(def render-microbes  (ref true))
+(def running (ref false))
 
 (defn toggle-render-nutrients []
-  (def render-nutrients? (not render-nutrients?)))
+  (ref-set render-nutrients (not @render-nutrients)))
 
 (defn toggle-render-microbes [] 
-  (def render-microbes?  (not render-microbes?)))
+  (ref-set render-microbes (not @render-microbes)))
 
 (defn toggle-running []  
-  (def running (not running)))
+  (ref-set running (not @running)))
 
 ;; tracking 
 ;; (def alive-agents (ref {}))
@@ -61,6 +61,9 @@
                 (range dim)))
         (range dim)))
 
+(defn place [[x y]] 
+  (-> world (nth x) (nth y)))
+
 (defstruct microbe :id :pos :health :metabolism :children :age)
 
 (defn create-microbe 
@@ -76,9 +79,6 @@
      (alter microbes-alive conj [id (agent new-mic)])
      id))) ;; ?
 
-(defn place [[x y]] 
-  (-> world (nth x) (nth y)))
-
 (defmacro bound? [loc]
   `(let [[x# y#] ~loc]
      (and (>= x# 0) (< x# dim) (>= y# 0) (< y# dim))))
@@ -93,7 +93,8 @@
                   [ 1  0] 1
                   [ 1  1] 0.6})
 
-(defn eat [[x y]]
+(defn eat [[x y] & {:keys [ratio] 
+                    :or   {ratio 1}}]
   "must be called inside dosync block"
   (apply + (for [dx [-1 0 1]
                  dy [-1 0 1]]
@@ -181,7 +182,7 @@
  
 
 ;; animation
-(def microbe-scale  (* microbe-life 2))
+(def microbe-scale  microbe-life)
 (def nutrient-scale (/ 255 max-nutrients))
 
 (defn fill-cell [#^Graphics g x y c]
@@ -190,14 +191,14 @@
     (.fillRect (* x scale) (* y scale) scale scale)))
 
 (defn render-place [g p x y]
-  (when (and render-nutrients? (pos? (:nutrient p)))
+  (when (and @render-nutrients (pos? (:nutrient p)))
     (fill-cell g x y (new Color 0 255 0 
                           ;; (if (pos? (:nutrientc p)) 0 255)
                           (int (min 255 (* 255 (/ (:nutrient p) max-nutrients))))
                           )))
-  (when (and render-microbes? (pos? (:life p)))
+  (when (and @render-microbes (pos? (:life p)))
     (fill-cell g x y (new Color 255 0 0
-                          (int (min 255 (* 255 (/ (:life p) microbe-scale))))
+                          (int (min 255 (+ 100 (* 150 (/ (:life p) microbe-scale)))))
                           ;; (if (pos? (:mic-count p)) 255 0)
                           ))))
 
@@ -230,7 +231,7 @@
 (def animator (agent 0))
 
 (defn animation [age]
-  (when running
+  (when @running
     (send-off *agent* #'animation))
   (. panel (repaint))
   (. Thread (sleep animation-sleep-ms))
@@ -285,7 +286,7 @@
           (alter p assoc :nutrient (+ n supply-delta))))))))
 
 (defn nutrient-supply [x]
-  (when running 
+  (when @running 
     (send-off *agent* nutrient-supply))
   (supply)
   (. Thread (sleep supply-sleep-ms))
@@ -296,8 +297,8 @@
 (defn run [] 
   (dosync 
    (reset-world)
-   (def running true)
-   (def microbes-alive (ref {}))
+   (ref-set running true)
+   (ref-set microbes-alive {})
    (def supplier (agent 0))
    (def microbes (seed-microbe 1))
    (start-animation)
@@ -306,7 +307,7 @@
 
 (defn stop []
   (dosync 
-   (def running false)))
+   (ref-set running false)))
 
 (defn count-alive []
   (apply + (map (fn [[k v]] 
