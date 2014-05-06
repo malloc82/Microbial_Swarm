@@ -1,6 +1,10 @@
 (ns microbe-swarm.core
-  (use [clojure.core])
-  (use [clojure.set])
+  (use [clojure.core]
+       [clojure.set]
+       ;; [incanter core charts]
+       )
+  (require [incanter.core :as incanter-core]
+           [incanter.charts :as charts])
   (import 
    (java.awt Color Graphics Dimension)
    (java.awt.image BufferedImage)
@@ -10,11 +14,13 @@
 
 ;; global parameters
 
-(def dim 20)
+(def dim 50)
+;pixels per world cell
+(def scale 10)
 
-(def microbe-sleep-ms   100)
-(def animation-sleep-ms  50)
-(def supply-sleep-ms    100)
+(def microbe-sleep-ms   200)
+(def animation-sleep-ms 200)
+(def supply-sleep-ms    200)
 
 ;; max number of neighbors allowed ?
 (def max-neighbors 8)
@@ -25,10 +31,8 @@
 (def microbe-metabolism {:rate 8 :split 12})
 
 (def max-nutrients 20)
-(def supply-delta 3)
+(def supply-delta 5)
 
-;pixels per world cell
-(def scale 10)
 
 (def render-nutrients (ref true))
 (def render-microbes  (ref true))
@@ -79,7 +83,7 @@
      (alter microbes-alive conj [id (agent new-mic)])
      id))) ;; ?
 
-(defmacro bound? [loc]
+(defmacro in-bound? [loc]
   `(let [[x# y#] ~loc]
      (and (>= x# 0) (< x# dim) (>= y# 0) (< y# dim))))
 
@@ -100,7 +104,7 @@
                  dy [-1 0 1]]
              (let [i (+ x dx)
                    j (+ y dy)]
-               (if (bound? [i j])
+               (if (in-bound? [i j])
                  (let [p  (place [i j])
                        fd (:nutrient @p)
                        n  (consumption [dx dy])]
@@ -123,13 +127,31 @@
   [[x y] [dx dy]]
   [(+ x dx) ( + y dy)])
 
-(defn select-pos
+(defn select-pos-rand
   "algorithm for selecting location of a new microbe to be born"
   [curr-pos]
   (loop [x (delta-loc curr-pos (neighbor-delta (rand-int 8)))]
-    (if (bound? x)
+    (if (in-bound? x)
       x
       (recur (delta-loc curr-pos (neighbor-delta (rand-int 8)))))))    
+
+(defn select-pos-best-avg
+  [curr-pos]
+  (let [possible (filter #(not (nil? %)) 
+                         (for [neighbor (range 8)]
+                           (let [loc (delta-loc curr-pos (neighbor-delta neighbor))]
+                             (if (in-bound? loc)
+                               (let [p         (place loc)
+                                     mic-count (:mic-count @p)
+                                     nutrient  (:nutrient @p)]
+                                 {:pos loc :score (/ nutrient (inc mic-count))})
+                               nil))))
+        best-pos (apply max-key :score possible)]
+    (if (nil? best-pos)
+      (select-pos-rand curr-pos)
+      (let [candidates (filterv #(= (:score %) (:score best-pos)) possible)
+            n (count candidates)]
+       (:pos (candidates (rand-int n)))))))
 
 (defn live [{id       :id 
              pos      :pos 
@@ -138,48 +160,61 @@
              children :children 
              age      :age}]
   ;; (println "id = " id "location = " loc "health = " health)
-  (dosync 
+  (dosync
    (let [loc       (place pos)
          cell-life (:life @loc)]
-     (cond 
-      (> health (:split metab)) (let [mic-life (quot health 2)
-                                      new-id   (create-microbe (select-pos pos) mic-life metab)
-                                      life     (let [left (- cell-life mic-life)]
-                                                 (if (pos? left) left 0))]
-                                  (alter loc assoc :life life)
-                                  (send-off (@microbes-alive new-id) live)
-                                  (when running
-                                    (send-off *agent* live))
-                                  (. Thread (sleep microbe-sleep-ms))
-                                  (struct microbe 
-                                          id
-                                          pos
-                                          mic-life
-                                          metab
-                                          (inc children) 
-                                          (inc age)))
-      (> health 0) (let [portion (eat pos)
-                         life    (- (+ cell-life portion) (:rate metab))]
-                     (alter loc assoc :life life)
-                     (when running
-                       (send-off *agent* live))
-                     (. Thread (sleep microbe-sleep-ms))
-                     (struct microbe
-                             id
-                             pos 
-                             (- (+ health portion) (:rate metab)) 
-                             metab
-                             children 
-                             (inc age)))
-      :else (let [mic-count (:mic-count @loc)]
-              (alter loc assoc :mic-count (dec mic-count))
-              (alter microbes-dead  conj   (@microbes-alive id))
-              (alter microbes-alive dissoc id)
-              (struct microbe id pos 0 metab children age))))))
+     (when running 
+       (send-off *agent* live)
+       (cond 
+        (> health (:split metab)) (let [mic-life (quot health 2)
+                                        ;; new-pos  (select-pos-rand pos)
+                                        new-pos  (select-pos-best-avg pos)
+                                        new-id   (create-microbe new-pos mic-life metab)
+                                        life     (let [left (- cell-life mic-life)]
+                                                   (if (pos? left) left 0))]
+                                    (alter loc assoc :life life)
+                                    (send-off (@microbes-alive new-id) live)
+                                    (. Thread (sleep microbe-sleep-ms))
+                                    (struct microbe 
+                                            id
+                                            pos
+                                            mic-life
+                                            metab
+                                            (inc children) 
+                                            (inc age)))
+        (> health 0) (let [portion (eat pos)
+                           life    (- (+ cell-life portion) (:rate metab))]
+                       (alter loc assoc :life life)
+                       (when running
+                         (send-off *agent* live))
+                       (. Thread (sleep microbe-sleep-ms))
+                       (struct microbe
+                               id
+                               pos 
+                               (- (+ health portion) (:rate metab)) 
+                               metab
+                               children 
+                               (inc age)))
+        :else (let [mic-count (:mic-count @loc)]
+                (alter loc assoc :mic-count (dec mic-count))
+                (alter microbes-dead  conj   (@microbes-alive id))
+                (alter microbes-alive dissoc id)
+                (struct microbe id pos 0 metab children age)))))))
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; UI ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
- 
+;; nutrient growth  
+(def supplier (agent 0))
+
+(defn supply []
+  (dorun 
+   (for [x (range dim) 
+         y (range dim)]
+     (dosync 
+      (let [p (place [x y])
+            n (:nutrient @p)]
+        (when (< n max-nutrients)
+          (alter p assoc :nutrient (+ n supply-delta))))))))
 
 ;; animation
 (def microbe-scale  microbe-life)
@@ -220,7 +255,7 @@
     ;;              (* scale nants-sqrt) (* scale nants-sqrt)))
     (. g (drawImage img 0 0 nil))
     (. bg (dispose))))
- 
+
 (def panel (doto (proxy [JPanel] []
                         (paint [g] (render g)))
              (.setPreferredSize (new Dimension 
@@ -237,12 +272,25 @@
   (. Thread (sleep animation-sleep-ms))
   (inc age))
 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; monitor ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(def collector (agent nil))
+
+(defn collect [chart]
+  (let [total (ref 0)]
+    (dorun
+     (for [x (range dim)
+           y (range dim)]
+         (dosync 
+          (let [p (place [x y])]
+            (ref-set total (+ total (:life @p))))))))
+  )
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; use ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defn reset-world [& {:keys [nutrients dimension] 
                       :or   {nutrients 10 
-                             dimension 20}}]
+                             dimension dim}}]
   (dosync 
    (def world (mapv (fn [_] 
                       (mapv (fn [_] (ref (struct cell 0 0 nutrients))) 
@@ -273,18 +321,6 @@
           y (rand-int dim)]
       (create-microbe [x y] microbe-life microbe-metabolism))))
 
-(def supplier (agent 0))
-
-(defn supply []
-  (dorun 
-   (for [x (range dim) 
-         y (range dim)]
-     (dosync 
-      (let [p (place [x y])
-            n (:nutrient @p)]
-        (when (< n max-nutrients)
-          (alter p assoc :nutrient (+ n supply-delta))))))))
-
 (defn nutrient-supply [x]
   (when @running 
     (send-off *agent* nutrient-supply))
@@ -292,22 +328,27 @@
   (. Thread (sleep supply-sleep-ms))
   (inc x))
 
-
-
-(defn run [] 
-  (dosync 
+(defn run []
+  (dosync
    (reset-world)
-   (ref-set running true)
-   (ref-set microbes-alive {})
+   (def running (ref true))
+   (def microbes-alive (ref  {}))
+   (def microbes-dead  (ref #{}))
    (def supplier (agent 0))
-   (def microbes (seed-microbe 1))
+   ;; (def microbes (seed-microbe 10))
+   (def microbes [(create-microbe [(int (/ dim 2)) (int (/ dim 2))] microbe-life microbe-metabolism)])
    (start-animation)
+   (. Thread (sleep 2000))
    (dorun (map (fn [id] (send-off (@microbes-alive id) live)) microbes))
-   (send-off supplier nutrient-supply)))
+   (send-off supplier nutrient-supply)
+   ))
 
 (defn stop []
   (dosync 
-   (ref-set running false)))
+   (def running false)
+   (def microbes-alive nil)
+   (def microbes-dead  (ref #{}))
+   ))
 
 (defn count-alive []
   (apply + (map (fn [[k v]] 
@@ -316,3 +357,11 @@
 
 (defn count-dead [] 
   (count @microbes-dead))
+
+(defn stop-reset [] 
+  (dosync 
+   (def running (ref false))
+   (def world nil)
+   (def microbes-alive nil)
+   (def microbes-dead  (ref #{}))))
+
