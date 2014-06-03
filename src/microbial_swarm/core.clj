@@ -14,9 +14,9 @@
 
 ;; global parameters
 
-(def dim 50)
+(def dim 100)
 ;pixels per world cell
-(def scale 10)
+(def scale 3)
 
 (def microbe-sleep-ms   200)
 (def animation-sleep-ms 200)
@@ -31,7 +31,7 @@
 (def microbe-metabolism {:rate 8 :split 12})
 
 (def max-nutrients 20)
-(def supply-delta 1)
+(def supply-delta 3)
 
 
 (def render-nutrients (ref true))
@@ -168,7 +168,7 @@
      ;; (when running 
      ;;   (send-off *agent* live)
      (cond 
-      (> health (:split metab)) (let [mic-life (quot health 2)
+      (> health (:split metab)) (let [mic-life (/ health 2)
                                       ;; new-pos  (select-pos-rand pos)
                                       new-pos  (select-pos-best-avg pos)
                                       new-id   (create-microbe new-pos mic-life metab)
@@ -377,8 +377,10 @@
   (apply await (map (fn [[_ a]]
                       (send-off a live))
                     @microbes-alive))
-        (await (send-off supplier nutrient-supply))
-        (await (send-off animator animation)))
+  (await (send-off supplier nutrient-supply))
+  (await (send-off animator animation))
+  (print-alive-info)
+  (println @(place [25 25])))
 
 (defn print-alive-info [] 
   (dorun (map (fn [[_ a]] (println @a)) @microbes-alive))
@@ -400,7 +402,8 @@
 
 (defn init []
   (def microbes [(create-microbe [(int (/ dim 2)) (int (/ dim 2))] microbe-life microbe-metabolism)])
-  (start-animation))
+  ;; (start-animation)
+  )
 
 (defn simulation [iteration] 
   (reset-world)
@@ -410,16 +413,13 @@
   (def supplier (agent 0))
   (def microbes-alive (ref {}))
   (def microbes-dead (ref #{}))
-  (def microbes [(create-microbe [(int (/ dim 2)) (int (/ dim 2))] microbe-life microbe-metabolism)])
+  (def microbes [(create-microbe [25 25] microbe-life microbe-metabolism)
+                 (create-microbe [75 75] microbe-life microbe-metabolism)])
   (start-animation)
   (loop [iter iteration]
     (if (and running 
              (> iter 0))
       (do 
-        ;; (dorun (map (fn [[id a]] 
-        ;;              (send-off a live)
-        ;;              a)
-        ;;             @microbes-alive))
         (apply await (map (fn [[_ a]]
                              (send-off a live))
                            @microbes-alive))
@@ -427,5 +427,4 @@
         (await (send-off animator animation))
         (. Thread (sleep 100))
         (recur (dec iter)))
-      (def running false)))
-  )
+      (def running false))))
